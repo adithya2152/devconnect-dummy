@@ -1,0 +1,15 @@
+ /* index.css or App.css */
+
+html, body, #root {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  width: 100%;
+  background: linear-gradient(to bottom right, #0f2027, #203a43, #2c5364);
+
+  overflow-x: hidden;
+}
+
+* {
+  box-sizing: border-box;
+}

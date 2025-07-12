@@ -1,0 +1,40 @@
+# Python bytecode files
+*.pyc
+*.pyo
+*.pyd
+__pycache__/
+
+# Virtual environment
+venv/
+env/
+.venv/
+.env/
+
+# FastAPI specific (logs, database)
+*.db
+*.sqlite3
+
+# IDE specific files
+.vscode/
+.idea/
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Testing folders
+test_output/
+*.coverage
+*.coveragerc
+nosetests.xml
+coverage.xml
+*.hypothesis/
+
+# Logs
+*.log
+
+# Environment variables
+.env
+
+# Migrations (if using alembic)
+migrations/
