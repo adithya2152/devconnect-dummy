@@ -495,3 +495,93 @@ async def add_community(room: dict):
     except Exception as e:
         print(f"Error inserting community: {e}")
         return None
+
+async def join_community(community_id: str, user_id: str):
+    """
+    Add user to community as a member
+    """
+    try:
+        member_data = {
+            "room_id": community_id,
+            "user_id": user_id,
+            "role": "member"
+        }
+        
+        response = supabase.table("room_members").insert(member_data).execute()
+        return response.data[0] if response.data else None
+        
+    except Exception as e:
+        print(f"Error joining community: {e}")
+        return None
+
+async def leave_community(community_id: str, user_id: str):
+    """
+    Remove user from community
+    """
+    try:
+        response = (
+            supabase.table("room_members")
+            .delete()
+            .eq("room_id", community_id)
+            .eq("user_id", user_id)
+            .execute()
+        )
+        return True
+        
+    except Exception as e:
+        print(f"Error leaving community: {e}")
+        return False
+
+async def get_community_by_id(community_id: str):
+    """
+    Get community details by ID
+    """
+    try:
+        response = (
+            supabase.table("rooms")
+            .select("*")
+            .eq("id", community_id)
+            .eq("type", "group")
+            .single()
+            .execute()
+        )
+        return response.data
+        
+    except Exception as e:
+        print(f"Error fetching community by ID: {e}")
+        return None
+
+async def check_community_membership(community_id: str, user_id: str):
+    """
+    Check if user is a member of the community
+    """
+    try:
+        response = (
+            supabase.table("room_members")
+            .select("*")
+            .eq("room_id", community_id)
+            .eq("user_id", user_id)
+            .execute()
+        )
+        return len(response.data) > 0
+        
+    except Exception as e:
+        print(f"Error checking community membership: {e}")
+        return False
+
+async def get_community_members(community_id: str):
+    """
+    Get all members of a community with their profile details
+    """
+    try:
+        response = (
+            supabase.table("room_members")
+            .select("*, profiles(*)")
+            .eq("room_id", community_id)
+            .execute()
+        )
+        return response.data
+        
+    except Exception as e:
+        print(f"Error fetching community members: {e}")
+        return []
