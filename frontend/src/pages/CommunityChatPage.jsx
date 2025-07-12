@@ -41,6 +41,7 @@ export default function CommunityChatPage() {
   const [socket, setSocket] = useState(null);
   const [showMembers, setShowMembers] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [memberCount, setMemberCount] = useState(0);
 
   const user = JSON.parse(localStorage.getItem("user") || "{}");
   const userId = user?.id;
@@ -69,16 +70,22 @@ export default function CommunityChatPage() {
           { headers }
         );
 
-        const { community: communityData, is_member, members: membersList } = detailsRes.data;
+        const { 
+          community: communityData, 
+          membership_status, 
+          members: membersList,
+          member_count 
+        } = detailsRes.data;
 
-        if (!is_member) {
-          toast.error("You must be a member to access this community");
+        if (membership_status !== "approved") {
+          toast.error("You must be an approved member to access this community");
           navigate("/community");
           return;
         }
 
         setCommunity(communityData);
         setMembers(membersList || []);
+        setMemberCount(member_count || 0);
 
         // Get messages
         const messagesRes = await axios.get(
@@ -107,25 +114,51 @@ export default function CommunityChatPage() {
     };
 
     ws.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-      if (!data.sender_id) {
-        data.sender_id = userId;
+      try {
+        const data = JSON.parse(event.data);
+        console.log("📨 Received message:", data);
+        
+        // Ensure we have all required fields
+        if (!data.sender_id) {
+          data.sender_id = userId;
+        }
+        
+        // Check if message already exists to prevent duplicates
+        setMessages(prev => {
+          const exists = prev.some(m => 
+            m.id === data.id || 
+            (m.content === data.content && 
+             m.sender_id === data.sender_id && 
+             Math.abs(new Date(m.created_at) - new Date(data.created_at)) < 1000)
+          );
+          
+          if (exists) {
+            console.log("🔄 Message already exists, skipping");
+            return prev;
+          }
+          
+          console.log("✅ Adding new message to UI");
+          return [...prev, data];
+        });
+      } catch (error) {
+        console.error("❌ Error processing WebSocket message:", error);
       }
-      
-      // Check if message already exists to prevent duplicates
-      setMessages(prev => {
-        const exists = prev.some(m => m.id === data.id || 
-          (m.content === data.content && m.sender_id === data.sender_id && m.timestamp === data.timestamp));
-        return exists ? prev : [...prev, data];
-      });
     };
 
-    ws.onclose = () => console.log("🔌 Community WebSocket connection closed");
+    ws.onerror = (error) => {
+      console.error("❌ WebSocket error:", error);
+    };
+
+    ws.onclose = (event) => {
+      console.log("🔌 Community WebSocket connection closed", event.code, event.reason);
+    };
 
     setSocket(ws);
 
     return () => {
-      ws.close();
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.close();
+      }
     };
   }, [communityId, userId, navigate]);
 
@@ -133,28 +166,31 @@ export default function CommunityChatPage() {
     if (!newMessage.trim() || !socket || !community) return;
 
     const msgData = {
-      content: newMessage,
+      content: newMessage.trim(),
       timestamp: new Date().toISOString(),
     };
 
-    // Send to WebSocket
-    socket.send(JSON.stringify(msgData));
+    console.log("📤 Sending message:", msgData);
 
-    // Add to local UI with unique ID
-    const localMsg = {
-      ...msgData,
-      sender_id: userId,
-      id: `local-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-      created_at: new Date().toISOString(),
-    };
-
-    setMessages((prev) => [...prev, localMsg]);
-    setNewMessage("");
+    // Check WebSocket state before sending
+    if (socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify(msgData));
+      setNewMessage("");
+    } else {
+      console.error("❌ WebSocket not connected");
+      toast.error("Connection lost. Please refresh the page.");
+    }
   };
 
   const getMemberById = (memberId) => {
-    const member = members.find(m => m.user_id === memberId || m.profiles?.id === memberId);
-    return member?.profiles || { full_name: "Unknown User", username: "unknown" };
+    const member = members.find(m => 
+      m.user_id === memberId || 
+      m.profiles?.id === memberId
+    );
+    return member?.profiles || { 
+      full_name: "Unknown User", 
+      username: "unknown" 
+    };
   };
 
   if (loading) {
@@ -218,7 +254,7 @@ export default function CommunityChatPage() {
                 {community.name}
               </Typography>
               <Typography variant="caption" color="rgba(255,255,255,0.7)">
-                {members.length} members
+                {memberCount} members
               </Typography>
             </Box>
 
@@ -226,7 +262,7 @@ export default function CommunityChatPage() {
               color="inherit"
               onClick={() => setShowMembers(!showMembers)}
             >
-              <Badge badgeContent={members.length} color="primary">
+              <Badge badgeContent={memberCount} color="primary" max={99}>
                 <InfoIcon />
               </Badge>
             </IconButton>
@@ -262,7 +298,7 @@ export default function CommunityChatPage() {
               
               return (
                 <Box
-                  key={msg.id}
+                  key={msg.id || `${msg.sender_id}-${msg.created_at}-${msg.content.substring(0, 10)}`}
                   sx={{
                     display: "flex",
                     justifyContent: isMine ? "flex-end" : "flex-start",
@@ -359,6 +395,12 @@ export default function CommunityChatPage() {
             size="small"
             value={newMessage}
             onChange={(e) => setNewMessage(e.target.value)}
+            onKeyPress={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                handleSend();
+              }
+            }}
             sx={{
               bgcolor: "#374151",
               borderRadius: 2,
@@ -372,7 +414,7 @@ export default function CommunityChatPage() {
           <IconButton 
             type="submit" 
             sx={{ color: "#60a5fa" }}
-            disabled={!newMessage.trim()}
+            disabled={!newMessage.trim() || !socket || socket.readyState !== WebSocket.OPEN}
           >
             <SendIcon />
           </IconButton>
@@ -395,7 +437,7 @@ export default function CommunityChatPage() {
       >
         <Box sx={{ p: 2 }}>
           <Typography variant="h6" gutterBottom>
-            Members ({members.length})
+            Members ({memberCount})
           </Typography>
           <Divider sx={{ borderColor: "#374151", mb: 2 }} />
           

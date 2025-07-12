@@ -22,12 +22,17 @@ import {
   ListItem,
   ListItemAvatar,
   ListItemText,
+  Badge,
+  Divider,
 } from "@mui/material";
 import ShareIcon from "@mui/icons-material/Share";
 import AddIcon from "@mui/icons-material/Add";
 import ChatIcon from "@mui/icons-material/Chat";
 import GroupIcon from "@mui/icons-material/Group";
 import ExitToAppIcon from "@mui/icons-material/ExitToApp";
+import CheckIcon from "@mui/icons-material/Check";
+import CloseIcon from "@mui/icons-material/Close";
+import PendingIcon from "@mui/icons-material/Pending";
 import { useState, useEffect } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import axios from "axios";
@@ -38,7 +43,7 @@ import useAuthGuard from "../hooks/useAuthGuarf";
 export default function Communities() {
   useAuthGuard();
   const navigate = useNavigate();
-  const { action, communityId } = useParams(); // For handling /community/join/:communityId
+  const { action, communityId } = useParams();
   const [tab, setTab] = useState(0);
   const [search, setSearch] = useState("");
   const [explore, setExplore] = useState([]);
@@ -47,6 +52,7 @@ export default function Communities() {
   const [dialog, setDialog] = useState({ open: false, community: null });
   const [create, setCreate] = useState({ name: "", description: "" });
   const [loading, setLoading] = useState(false);
+  const [pendingRequests, setPendingRequests] = useState({});
 
   const BASE = "http://localhost:8000";
 
@@ -74,6 +80,18 @@ export default function Communities() {
       setExplore(exploreRes.data);
       setJoined(joinedRes.data);
       setHosted(hostedRes.data);
+
+      // Fetch pending requests for hosted communities
+      const requestsPromises = hostedRes.data.map(community =>
+        axios.get(`${BASE}/communities/pending-requests/${community.id}`, { headers })
+          .then(res => ({ [community.id]: res.data.requests }))
+          .catch(() => ({ [community.id]: [] }))
+      );
+
+      const requestsResults = await Promise.all(requestsPromises);
+      const requestsMap = requestsResults.reduce((acc, curr) => ({ ...acc, ...curr }), {});
+      setPendingRequests(requestsMap);
+
     } catch (error) {
       console.error("Error fetching communities:", error);
       toast.error("Failed to load communities");
@@ -86,11 +104,15 @@ export default function Communities() {
       
       // Get community details first
       const detailsRes = await axios.get(`${BASE}/communities/${communityId}`, { headers });
-      const { community, is_member } = detailsRes.data;
+      const { community, membership_status } = detailsRes.data;
 
-      if (is_member) {
+      if (membership_status === "approved") {
         // Already a member, go to chat
         navigate(`/community/${communityId}/chat`);
+      } else if (membership_status === "pending") {
+        // Request already pending
+        toast.info("Your join request is pending approval");
+        navigate("/community");
       } else {
         // Show join dialog
         setDialog({ open: true, community });
@@ -102,27 +124,65 @@ export default function Communities() {
     }
   };
 
-  const handleJoin = async (communityId) => {
+  const handleRequestJoin = async (communityId) => {
     try {
       setLoading(true);
       const headers = { Authorization: `Bearer ${localStorage.getItem("access_token")}` };
       
-      await axios.post(`${BASE}/communities/join`, 
+      await axios.post(`${BASE}/communities/request-join`, 
         { community_id: communityId }, 
         { headers }
       );
       
-      toast.success("Successfully joined community!");
+      toast.success("Join request sent! Waiting for admin approval.");
       setDialog({ open: false, community: null });
       
       // Refresh communities
       await fetchCommunities();
       
-      // Navigate to chat
-      navigate(`/community/${communityId}/chat`);
     } catch (error) {
-      console.error("Error joining community:", error);
-      toast.error(error.response?.data?.detail || "Failed to join community");
+      console.error("Error requesting to join community:", error);
+      toast.error(error.response?.data?.detail || "Failed to send join request");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleApproveRequest = async (requestId) => {
+    try {
+      setLoading(true);
+      const headers = { Authorization: `Bearer ${localStorage.getItem("access_token")}` };
+      
+      await axios.post(`${BASE}/communities/approve-request`, 
+        { request_id: requestId }, 
+        { headers }
+      );
+      
+      toast.success("Request approved successfully!");
+      await fetchCommunities();
+    } catch (error) {
+      console.error("Error approving request:", error);
+      toast.error(error.response?.data?.detail || "Failed to approve request");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRejectRequest = async (requestId) => {
+    try {
+      setLoading(true);
+      const headers = { Authorization: `Bearer ${localStorage.getItem("access_token")}` };
+      
+      await axios.post(`${BASE}/communities/reject-request`, 
+        { request_id: requestId }, 
+        { headers }
+      );
+      
+      toast.success("Request rejected successfully!");
+      await fetchCommunities();
+    } catch (error) {
+      console.error("Error rejecting request:", error);
+      toast.error(error.response?.data?.detail || "Failed to reject request");
     } finally {
       setLoading(false);
     }
@@ -182,118 +242,182 @@ export default function Communities() {
     toast.success("Join link copied to clipboard!");
   };
 
-  const CommunityCard = ({ comm, isJoined, isHost }) => (
-    <Card 
-      sx={{ 
-        bgcolor: "#1f2937", 
-        color: "white",
-        height: "100%",
-        display: "flex",
-        flexDirection: "column",
-        transition: "transform 0.2s ease, box-shadow 0.2s ease",
-        "&:hover": {
-          transform: "translateY(-4px)",
-          boxShadow: "0 8px 25px rgba(0,0,0,0.3)"
-        }
-      }}
-    >
-      <CardContent sx={{ flex: 1 }}>
-        <Box display="flex" alignItems="center" gap={1} mb={2}>
-          <GroupIcon color="primary" />
-          <Typography variant="h6" fontWeight="bold">
-            {comm.name}
+  const getMembershipStatus = (communityId) => {
+    // Check if user is a member of this community
+    return joined.some(j => j.id === communityId) ? "approved" : null;
+  };
+
+  const CommunityCard = ({ comm, isJoined, isHost }) => {
+    const pendingCount = pendingRequests[comm.id]?.length || 0;
+    
+    return (
+      <Card 
+        sx={{ 
+          bgcolor: "#1f2937", 
+          color: "white",
+          height: "100%",
+          display: "flex",
+          flexDirection: "column",
+          transition: "transform 0.2s ease, box-shadow 0.2s ease",
+          "&:hover": {
+            transform: "translateY(-4px)",
+            boxShadow: "0 8px 25px rgba(0,0,0,0.3)"
+          }
+        }}
+      >
+        <CardContent sx={{ flex: 1 }}>
+          <Box display="flex" alignItems="center" gap={1} mb={2}>
+            <GroupIcon color="primary" />
+            <Typography variant="h6" fontWeight="bold">
+              {comm.name}
+            </Typography>
+            {isHost && pendingCount > 0 && (
+              <Badge badgeContent={pendingCount} color="error">
+                <PendingIcon color="warning" />
+              </Badge>
+            )}
+          </Box>
+          
+          <Typography variant="body2" color="rgba(255,255,255,0.7)" mb={2}>
+            {comm.description || "No description available"}
           </Typography>
-        </Box>
-        
-        <Typography variant="body2" color="rgba(255,255,255,0.7)" mb={2}>
-          {comm.description || "No description available"}
-        </Typography>
-        
-        <Box display="flex" gap={1} flexWrap="wrap">
-          <Chip 
-            label={isHost ? "Owner" : isJoined ? "Member" : "Public"} 
-            size="small"
-            color={isHost ? "secondary" : isJoined ? "success" : "default"}
-          />
-          <Chip 
-            label={`Created ${new Date(comm.created_at).toLocaleDateString()}`}
-            size="small"
-            variant="outlined"
-          />
-        </Box>
-      </CardContent>
-      
-      <CardActions sx={{ p: 2, pt: 0 }}>
-        <Box display="flex" gap={1} width="100%">
-          {isHost ? (
-            <>
-              <Button
-                size="small"
-                variant="contained"
-                startIcon={<ChatIcon />}
-                onClick={() => handleCommunityChat(comm.id)}
-                sx={{ flex: 1 }}
-              >
-                Manage
-              </Button>
-              <Tooltip title="Copy join link">
-                <IconButton
-                  onClick={() => generateJoinLink(comm.id)}
-                  color="primary"
-                  size="small"
-                >
-                  <ShareIcon />
-                </IconButton>
-              </Tooltip>
-            </>
-          ) : isJoined ? (
-            <>
-              <Button
-                size="small"
-                variant="contained"
-                startIcon={<ChatIcon />}
-                onClick={() => handleCommunityChat(comm.id)}
-                sx={{ flex: 1 }}
-              >
-                Chat
-              </Button>
-              <Tooltip title="Leave community">
-                <IconButton
-                  onClick={() => handleLeave(comm.id)}
-                  color="error"
-                  size="small"
-                  disabled={loading}
-                >
-                  <ExitToAppIcon />
-                </IconButton>
-              </Tooltip>
-            </>
-          ) : (
-            <>
-              <Button
-                size="small"
-                variant="contained"
-                onClick={() => setDialog({ open: true, community: comm })}
-                disabled={loading}
-                sx={{ flex: 1 }}
-              >
-                Join
-              </Button>
-              <Tooltip title="Copy join link">
-                <IconButton
-                  onClick={() => generateJoinLink(comm.id)}
-                  color="primary"
-                  size="small"
-                >
-                  <ShareIcon />
-                </IconButton>
-              </Tooltip>
-            </>
+          
+          <Box display="flex" gap={1} flexWrap="wrap">
+            <Chip 
+              label={isHost ? "Owner" : isJoined ? "Member" : "Public"} 
+              size="small"
+              color={isHost ? "secondary" : isJoined ? "success" : "default"}
+            />
+            <Chip 
+              label={`Created ${new Date(comm.created_at).toLocaleDateString()}`}
+              size="small"
+              variant="outlined"
+            />
+          </Box>
+
+          {/* Pending Requests for Hosted Communities */}
+          {isHost && pendingCount > 0 && (
+            <Box mt={2}>
+              <Typography variant="subtitle2" color="warning.main" gutterBottom>
+                Pending Requests ({pendingCount})
+              </Typography>
+              <List dense sx={{ maxHeight: 150, overflow: "auto" }}>
+                {pendingRequests[comm.id]?.map((request) => (
+                  <ListItem 
+                    key={request.id}
+                    sx={{ 
+                      bgcolor: "rgba(255,193,7,0.1)", 
+                      borderRadius: 1, 
+                      mb: 0.5,
+                      p: 1
+                    }}
+                  >
+                    <ListItemAvatar>
+                      <Avatar sx={{ width: 24, height: 24, fontSize: "0.8rem" }}>
+                        {(request.profiles?.full_name || request.profiles?.username || "U")[0]}
+                      </Avatar>
+                    </ListItemAvatar>
+                    <ListItemText 
+                      primary={request.profiles?.full_name || request.profiles?.username || "Unknown User"}
+                      primaryTypographyProps={{ fontSize: "0.8rem" }}
+                    />
+                    <Box display="flex" gap={0.5}>
+                      <IconButton
+                        size="small"
+                        onClick={() => handleApproveRequest(request.id)}
+                        sx={{ color: "success.main" }}
+                        disabled={loading}
+                      >
+                        <CheckIcon fontSize="small" />
+                      </IconButton>
+                      <IconButton
+                        size="small"
+                        onClick={() => handleRejectRequest(request.id)}
+                        sx={{ color: "error.main" }}
+                        disabled={loading}
+                      >
+                        <CloseIcon fontSize="small" />
+                      </IconButton>
+                    </Box>
+                  </ListItem>
+                ))}
+              </List>
+            </Box>
           )}
-        </Box>
-      </CardActions>
-    </Card>
-  );
+        </CardContent>
+        
+        <CardActions sx={{ p: 2, pt: 0 }}>
+          <Box display="flex" gap={1} width="100%">
+            {isHost ? (
+              <>
+                <Button
+                  size="small"
+                  variant="contained"
+                  startIcon={<ChatIcon />}
+                  onClick={() => handleCommunityChat(comm.id)}
+                  sx={{ flex: 1 }}
+                >
+                  Manage
+                </Button>
+                <Tooltip title="Copy join link">
+                  <IconButton
+                    onClick={() => generateJoinLink(comm.id)}
+                    color="primary"
+                    size="small"
+                  >
+                    <ShareIcon />
+                  </IconButton>
+                </Tooltip>
+              </>
+            ) : isJoined ? (
+              <>
+                <Button
+                  size="small"
+                  variant="contained"
+                  startIcon={<ChatIcon />}
+                  onClick={() => handleCommunityChat(comm.id)}
+                  sx={{ flex: 1 }}
+                >
+                  Chat
+                </Button>
+                <Tooltip title="Leave community">
+                  <IconButton
+                    onClick={() => handleLeave(comm.id)}
+                    color="error"
+                    size="small"
+                    disabled={loading}
+                  >
+                    <ExitToAppIcon />
+                  </IconButton>
+                </Tooltip>
+              </>
+            ) : (
+              <>
+                <Button
+                  size="small"
+                  variant="contained"
+                  onClick={() => setDialog({ open: true, community: comm })}
+                  disabled={loading}
+                  sx={{ flex: 1 }}
+                >
+                  Request to Join
+                </Button>
+                <Tooltip title="Copy join link">
+                  <IconButton
+                    onClick={() => generateJoinLink(comm.id)}
+                    color="primary"
+                    size="small"
+                  >
+                    <ShareIcon />
+                  </IconButton>
+                </Tooltip>
+              </>
+            )}
+          </Box>
+        </CardActions>
+      </Card>
+    );
+  };
 
   const renderTabContent = () => {
     switch (tab) {
@@ -306,7 +430,7 @@ export default function Communities() {
                 <Grid item xs={12} sm={6} md={4} key={c.id}>
                   <CommunityCard 
                     comm={c} 
-                    isJoined={joined.some(j => j.id === c.id)}
+                    isJoined={getMembershipStatus(c.id) === "approved"}
                     isHost={hosted.some(h => h.id === c.id)}
                   />
                 </Grid>
@@ -518,14 +642,14 @@ export default function Communities() {
       >
         <DialogTitle sx={{ display: "flex", alignItems: "center", gap: 1 }}>
           <GroupIcon />
-          Join {dialog.community?.name}
+          Request to Join {dialog.community?.name}
         </DialogTitle>
         <DialogContent>
           <DialogContentText sx={{ color: "rgba(255,255,255,0.7)" }}>
             {dialog.community?.description}
           </DialogContentText>
           <Typography variant="body2" sx={{ mt: 2, color: "rgba(255,255,255,0.5)" }}>
-            You'll be able to participate in community discussions and access shared resources.
+            Your request will be sent to the community admin for approval. You'll be notified once it's reviewed.
           </Typography>
         </DialogContent>
         <DialogActions>
@@ -536,7 +660,7 @@ export default function Communities() {
             Cancel
           </Button>
           <Button 
-            onClick={() => handleJoin(dialog.community?.id)} 
+            onClick={() => handleRequestJoin(dialog.community?.id)} 
             autoFocus 
             variant="contained"
             disabled={loading}
@@ -545,7 +669,7 @@ export default function Communities() {
               "&:hover": { bgcolor: "#4338ca" }
             }}
           >
-            {loading ? "Joining..." : "Join Community"}
+            {loading ? "Sending..." : "Send Request"}
           </Button>
         </DialogActions>
       </Dialog>

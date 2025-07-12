@@ -4,7 +4,7 @@ from jose import jwt, JWTError
 import os
 import json
 import jwt 
-from db import save_message
+from db import save_message, check_community_membership
 
 ws_router = APIRouter()
 
@@ -38,6 +38,12 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
         await websocket.close(code=1008)
         return
 
+    # Check if user has access to this room
+    membership_status = await check_community_membership(room_id, user_id)
+    if membership_status != "approved":
+        print(f"❌ User {user_id} not authorized for room {room_id}")
+        await websocket.close(code=1008)
+        return
     await websocket.accept()
 
     if room_id not in room_connection:
@@ -62,14 +68,24 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                     "created_at": saved.get("created_at", "now")
                 })
 
+                # Broadcast to all connected clients in the room
                 for client in room_connection[room_id]:
-                    await client.send_text(broadcastData)
+                    try:
+                        await client.send_text(broadcastData)
+                    except Exception as e:
+                        print(f"❌ Error sending message to client: {e}")
+                        # Remove disconnected client
+                        if client in room_connection[room_id]:
+                            room_connection[room_id].remove(client)
             else:
                 print("❌ Error saving message")
 
     except WebSocketDisconnect:
-        room_connection[room_id].remove(websocket)
+        if websocket in room_connection[room_id]:
+            room_connection[room_id].remove(websocket)
         print(f"❌ Client [{user_id}] disconnected from room {room_id}")
 
     except Exception as e:
         print(f"❌ Unexpected error: {e}")
+        if websocket in room_connection[room_id]:
+            room_connection[room_id].remove(websocket)

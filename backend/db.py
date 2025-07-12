@@ -445,18 +445,19 @@ async def get_comminities_by_userid(userId : str):
     
 async def get_joined_communities(user_id: str):
     """
-    Fetch all communities (rooms) a user has joined
+    Fetch all communities (rooms) a user has joined with approved status
     Args:
         user_id: UUID of the user
     Returns:
         List of communities with details or empty list on error
     """
     try:
-        # First get all room IDs the user is a member of
+        # First get all room IDs the user is an approved member of
         member_response = (
             supabase.table("room_members")
             .select("room_id")
             .eq("user_id", user_id)
+            .eq("request_status", True)
             .execute()
         )
         
@@ -488,6 +489,7 @@ async def add_community(room: dict):
             "room_id":response.data[0]['id'],
             "user_id":room['created_by'],
             "role":"admin",
+            "request_status": True
         }
         supabase.table("room_members").insert(member_data).execute()
         
@@ -496,23 +498,170 @@ async def add_community(room: dict):
         print(f"Error inserting community: {e}")
         return None
 
-async def join_community(community_id: str, user_id: str):
+async def request_join_community(community_id: str, user_id: str):
     """
-    Add user to community as a member
+    Create a join request for a community (pending approval)
     """
     try:
         member_data = {
             "room_id": community_id,
             "user_id": user_id,
-            "role": "member"
+            "role": "member",
+            "request_status": False
         }
         
         response = supabase.table("room_members").insert(member_data).execute()
         return response.data[0] if response.data else None
         
     except Exception as e:
-        print(f"Error joining community: {e}")
+        print(f"Error requesting to join community: {e}")
         return None
+
+async def approve_join_request(request_id: str, admin_user_id: str):
+    """
+    Approve a join request (admin only)
+    """
+    try:
+        # First get the request details
+        request_response = (
+            supabase.table("room_members")
+            .select("*, rooms(*)")
+            .eq("id", request_id)
+            .eq("request_status", False)
+            .single()
+            .execute()
+        )
+        
+        if not request_response.data:
+            return {"success": False, "message": "Request not found"}
+        
+        request_data = request_response.data
+        
+        # Check if the current user is admin of the community
+        if request_data["rooms"]["created_by"] != admin_user_id:
+            return {"success": False, "message": "Only community admin can approve requests"}
+        
+        # Approve the request
+        update_response = (
+            supabase.table("room_members")
+            .update({"request_status": True})
+            .eq("id", request_id)
+            .execute()
+        )
+        
+        # Create approval notification
+        notification_data = {
+            "recipient_id": request_data["user_id"],
+            "sender_id": admin_user_id,
+            "type": "connection_request",
+            "reference_id": request_data["room_id"],
+            "message": f"Your request to join {request_data['rooms']['name']} has been approved!"
+        }
+        supabase.table("notifications").insert(notification_data).execute()
+        
+        return {"success": True}
+        
+    except Exception as e:
+        print(f"Error approving join request: {e}")
+        return {"success": False, "message": str(e)}
+
+async def reject_join_request(request_id: str, admin_user_id: str):
+    """
+    Reject a join request (admin only)
+    """
+    try:
+        # First get the request details
+        request_response = (
+            supabase.table("room_members")
+            .select("*, rooms(*)")
+            .eq("id", request_id)
+            .eq("request_status", False)
+            .single()
+            .execute()
+        )
+        
+        if not request_response.data:
+            return {"success": False, "message": "Request not found"}
+        
+        request_data = request_response.data
+        
+        # Check if the current user is admin of the community
+        if request_data["rooms"]["created_by"] != admin_user_id:
+            return {"success": False, "message": "Only community admin can reject requests"}
+        
+        # Delete the request
+        supabase.table("room_members").delete().eq("id", request_id).execute()
+        
+        # Create rejection notification
+        notification_data = {
+            "recipient_id": request_data["user_id"],
+            "sender_id": admin_user_id,
+            "type": "connection_request",
+            "reference_id": request_data["room_id"],
+            "message": f"Your request to join {request_data['rooms']['name']} has been rejected."
+        }
+        supabase.table("notifications").insert(notification_data).execute()
+        
+        return {"success": True}
+        
+    except Exception as e:
+        print(f"Error rejecting join request: {e}")
+        return {"success": False, "message": str(e)}
+
+async def get_pending_requests(community_id: str):
+    """
+    Get all pending join requests for a community
+    """
+    try:
+        response = (
+            supabase.table("room_members")
+            .select("*, profiles(*)")
+            .eq("room_id", community_id)
+            .eq("request_status", False)
+            .execute()
+        )
+        return response.data
+        
+    except Exception as e:
+        print(f"Error fetching pending requests: {e}")
+        return []
+
+async def create_join_notification(admin_id: str, requester_id: str, community_id: str):
+    """
+    Create notification for admin when someone requests to join
+    """
+    try:
+        # Get community name
+        community = await get_community_by_id(community_id)
+        community_name = community["name"] if community else "Unknown Community"
+        
+        # Get requester profile
+        requester_response = (
+            supabase.table("profiles")
+            .select("full_name, username")
+            .eq("id", requester_id)
+            .single()
+            .execute()
+        )
+        
+        requester_name = "Unknown User"
+        if requester_response.data:
+            requester_name = requester_response.data.get("full_name") or requester_response.data.get("username") or "Unknown User"
+        
+        notification_data = {
+            "recipient_id": admin_id,
+            "sender_id": requester_id,
+            "type": "connection_request",
+            "reference_id": community_id,
+            "message": f"{requester_name} wants to join {community_name}"
+        }
+        
+        supabase.table("notifications").insert(notification_data).execute()
+        return True
+        
+    except Exception as e:
+        print(f"Error creating join notification: {e}")
+        return False
 
 async def leave_community(community_id: str, user_id: str):
     """
@@ -553,31 +702,37 @@ async def get_community_by_id(community_id: str):
 
 async def check_community_membership(community_id: str, user_id: str):
     """
-    Check if user is a member of the community
+    Check user's membership status in the community
+    Returns: "approved", "pending", or None
     """
     try:
         response = (
             supabase.table("room_members")
-            .select("*")
+            .select("request_status")
             .eq("room_id", community_id)
             .eq("user_id", user_id)
+            .single()
             .execute()
         )
-        return len(response.data) > 0
+        
+        if response.data:
+            return "approved" if response.data["request_status"] else "pending"
+        return None
         
     except Exception as e:
         print(f"Error checking community membership: {e}")
-        return False
+        return None
 
 async def get_community_members(community_id: str):
     """
-    Get all members of a community with their profile details
+    Get all approved members of a community with their profile details
     """
     try:
         response = (
             supabase.table("room_members")
             .select("*, profiles(*)")
             .eq("room_id", community_id)
+            .eq("request_status", True)
             .execute()
         )
         return response.data
