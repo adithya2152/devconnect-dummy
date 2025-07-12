@@ -8,6 +8,7 @@ import Dashboard from './pages/dashboard';
 import './App.css';
 import CommunitiesPage from './pages/community';
 import Profile from './pages/Profile';
+import CommunityChatPage from './pages/CommunityChatPage';
 
 function App() {
   return (
@@ -20,6 +21,8 @@ function App() {
         <Route path="/chat" element={<ChatPage />} />
         <Route path="/dashboard" element={<Dashboard />} />
         <Route path="/community" element={<CommunitiesPage />} />
+        <Route path="/community/join/:communityId" element={<CommunitiesPage />} />
+        <Route path="/community/:communityId/chat" element={<CommunityChatPage />} />
         <Route path="/my_profile" element={<Profile />} />
       </Routes>
     </Router>

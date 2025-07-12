@@ -33,10 +33,12 @@ import { useNavigate, useParams } from "react-router-dom";
 import axios from "axios";
 import toast from "react-hot-toast";
 import NavBar from "../components/nav";
+import useAuthGuard from "../hooks/useAuthGuarf";
 
 export default function Communities() {
+  useAuthGuard();
   const navigate = useNavigate();
-  const { communityId } = useParams();
+  const { action, communityId } = useParams(); // For handling /community/join/:communityId
   const [tab, setTab] = useState(0);
   const [search, setSearch] = useState("");
   const [explore, setExplore] = useState([]);
@@ -54,10 +56,10 @@ export default function Communities() {
 
   // Handle direct community join via URL
   useEffect(() => {
-    if (communityId) {
+    if (action === "join" && communityId) {
       handleDirectJoin(communityId);
     }
-  }, [communityId]);
+  }, [action, communityId]);
 
   const fetchCommunities = async () => {
     try {
@@ -158,6 +160,9 @@ export default function Communities() {
         setCreate({ name: "", description: "" });
         await fetchCommunities();
         setTab(2); // Switch to hosted tab
+        
+        // Navigate to the new community chat
+        navigate(`/community/${response.data.id}/chat`);
       }
     } catch (error) {
       console.error("Error creating community:", error);
@@ -201,7 +206,7 @@ export default function Communities() {
         </Box>
         
         <Typography variant="body2" color="rgba(255,255,255,0.7)" mb={2}>
-          {comm.description}
+          {comm.description || "No description available"}
         </Typography>
         
         <Box display="flex" gap={1} flexWrap="wrap">

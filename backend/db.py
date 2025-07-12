@@ -456,7 +456,6 @@ async def get_joined_communities(user_id: str):
         member_response = (
             supabase.table("room_members")
             .select("room_id")
-            .eq("type" , "group")
             .eq("user_id", user_id)
             .execute()
         )
@@ -470,6 +469,7 @@ async def get_joined_communities(user_id: str):
         rooms_response = (
             supabase.table("rooms")
             .select("*")
+            .eq("type", "group")
             .in_("id", room_ids)
             .execute()
         )
